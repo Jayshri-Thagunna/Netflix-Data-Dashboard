@@ -3,14 +3,12 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-import tensorflow as tf
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Embedding, SimpleRNN, Dense
+# Machine Learning Libraries
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity 
 
 st.set_page_config(page_title="Netflix Global Analytics & ML", layout="wide")
-st.title("🎬 Netflix Global Analytics & Deep Learning Dashboard")
+st.title("Netflix Global Analytics & Machine Learning Dashboard")
 
 @st.cache_data
 def load_data():
@@ -19,6 +17,8 @@ def load_data():
     df['country'] = df['country'].fillna('Unknown Country')
     df['cast'] = df['cast'].fillna('Unknown Cast')
     df['rating'] = df['rating'].fillna('NR')
+    df['description'] = df['description'].fillna('')
+    df['listed_in'] = df['listed_in'].fillna('')
     df['date_added'] = pd.to_datetime(df['date_added'].str.strip(), errors='coerce')
     return df
 
@@ -31,7 +31,7 @@ filtered_df = df[df['type'].isin(content_type)]
 
 st.write(f"Showing **{len(filtered_df)}** records based on sidebar filters.")
 
-# Analytics Visualizations
+# Visualizations
 col1, col2 = st.columns(2)
 
 with col1:
@@ -46,90 +46,30 @@ with col2:
     fig_country = px.bar(top_countries, x='Country', y='Count', title="Top Content Producing Countries", color='Count')
     st.plotly_chart(fig_country, use_container_width=True)
 
-# Deep Learning: Recurrent Neural Network (RNN)
+# Machine Learning: TF-IDF + Cosine Similarity Recommender
 st.markdown("---")
-st.subheader("🧠 Deep Learning: Recurrent Neural Network (RNN)")
+st.subheader("Machine Learning: Content-Based Recommender (TF-IDF)")
 
-descriptions = df['description'].fillna('').values
+# Combine features into text string
+df['combined_features'] = df['listed_in'] + " " + df['country'] + " " + df['description']
 
-# Text Tokenization and Padding
-max_words = 1000
-max_len = 50
-
-tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
-tokenizer.fit_on_texts(descriptions)
-
-sequences = tokenizer.texts_to_sequences(descriptions)
-padded_sequences = pad_sequences(sequences, maxlen=max_len, padding='post')
-
-# RNN Model Definition
 @st.cache_resource
-def build_rnn_model():
-    model = Sequential([
-        Embedding(input_dim=max_words, output_dim=16, input_length=max_len),
-        SimpleRNN(units=32, return_sequences=False),
-        Dense(units=16, activation='relu'),
-        Dense(units=1, activation='sigmoid')
-    ])
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-    return model
+def build_ml_model():
+    tfidf = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = tfidf.fit_transform(df['combined_features'])
+    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+    return cosine_sim
 
-rnn_model = build_rnn_model()
+cosine_sim = build_ml_model()
 
-# RNN User Interface
-user_text = st.text_area("Enter a custom movie plot description to test the RNN:", 
-                         "A brave detective tracks down a mysterious killer across a dark city.")
+selected_movie = st.selectbox("Select a title to get ML-based recommendations:", df['title'].values)
 
-if st.button("Predict with RNN"):
-    user_seq = tokenizer.texts_to_sequences([user_text])
-    user_padded = pad_sequences(user_seq, maxlen=max_len, padding='post')
+if st.button("Get ML Recommendations"):
+    idx = df[df['title'] == selected_movie].index[0]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    sim_scores = sim_scores[1:6]  # Extract top 5
     
-    prediction = rnn_model.predict(user_padded)[0][0]
-    
-    st.write(f"**RNN Sequence Score:** `{prediction:.4f}`")
-    if prediction > 0.5:
-        st.success("The RNN classifies this description as **High-Intensity Content (Drama / Action / Thriller)**.")
-    else:
-        st.info("The RNN classifies this description as **Light-Hearted / General Audience Content**.")
-
-# Content-Based Recommendation Engine
-st.markdown("---")
-st.subheader("🎯 Content-Based Recommendation Engine")
-
-selected_title = st.selectbox("Select a title to get recommendations:", df['title'].values)
-
-if st.button("Get Recommendations"):
-    target_row = df[df['title'] == selected_title].iloc[0]
-    target_genres = set(str(target_row['listed_in']).split(', '))
-    target_country = str(target_row['country'])
-    
-    recommendations = []
-    
-    for idx, row in df.iterrows():
-        if row['title'] == selected_title:
-            continue
-        
-        score = 0
-        current_genres = set(str(row['listed_in']).split(', '))
-        matching_genres = target_genres.intersection(current_genres)
-        score += len(matching_genres) * 2
-        
-        if str(row['country']) == target_country and target_country != 'Unknown Country':
-            score += 1
-            
-        if score > 0:
-            recommendations.append({
-                'Title': row['title'],
-                'Type': row['type'],
-                'Genres': row['listed_in'],
-                'Country': row['country'],
-                'Match Score': score
-            })
-            
-    if recommendations:
-        rec_df = pd.DataFrame(recommendations)
-        top_5 = rec_df.sort_values(by='Match Score', ascending=False).head(5)
-        st.write(f"### Top 5 Recommendations for '{selected_title}':")
-        st.dataframe(top_5[['Title', 'Type', 'Genres', 'Country', 'Match Score']], use_container_width=True)
-    else:
-        st.write("No similar titles found with the current filter settings.")
+    movie_indices = [i[0] for i in sim_scores]
+    st.write(f"### Top 5 Recommendations for '{selected_movie}':")
+    st.dataframe(df[['title', 'type', 'listed_in', 'country']].iloc[movie_indices], use_container_width=True)
